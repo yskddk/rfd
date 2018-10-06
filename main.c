@@ -12,6 +12,13 @@
 
 
 
+/*
+ * For GPIO class, references:
+ * - https://www.kernel.org/doc/Documentation/gpio/sysfs.txt
+ * - https://raspberrypi.stackexchange.com/questions/44416/polling-gpio-pin-from-c-always-getting-immediate-response
+ */
+static bool g_opt_gpio_ = false;
+
 static bool g_opt_verbose_ = false;
 static int g_opt_timeout_ms_ = -1;
 static const char *g_opt_filepath_ = NULL;
@@ -20,9 +27,10 @@ static const char *g_opt_filepath_ = NULL;
 
 static const char *g_command_name_ = "rfd";
 
-static const char *SHORT_OPTIONS = "hvt:";
+static const char *SHORT_OPTIONS = "ghvt:";
 
 static const struct option LONG_OPTIONS[] = {
+        { "gpio",       no_argument,        NULL, 'g' },
         { "help",       no_argument,        NULL, 'h' },
         { "verbose",    no_argument,        NULL, 'v' },
         { "timeout",    required_argument,  NULL, 't' },
@@ -34,6 +42,7 @@ static void usage_(void)
     fprintf(stderr,
             "Usage: %s [OPTION]... FILE\n"
             "OPTIONs are:\n"
+            "  -g, --gpio\n"
             "  -h, --help\n"
             "  -v, --verbose\n"
             "  -t, --timeout=[MSEC] (default -1)\n"
@@ -72,6 +81,11 @@ static void retrieve_options_(int argc_, char *argv_[])
         }
 
         switch (c) {
+        case 'g':
+            g_opt_gpio_ = true;
+            verbose_("/sys/class/gpio mode enabled.\n");
+            break;
+
         case 'v':
             g_opt_verbose_ = true;
             verbose_("Verbose mode enabled.\n");
@@ -110,6 +124,7 @@ int main(int argc_, char *argv_[])
 {
     int fd = -1;
     int ret = 0;
+    short requested_events = 0;
     struct pollfd fds = { 0 };
 
     g_command_name_ = basename(argv_[0]);
@@ -121,12 +136,26 @@ int main(int argc_, char *argv_[])
         fprintf(stderr, "Failed to open %s.\n", g_opt_filepath_);
         exit(EXIT_FAILURE);
     }
-    fds.fd = fd;
-    fds.events = POLLIN;
-    fds.revents = 0;
 
-    verbose_("poll() for %s, timeout=%d.\n",
-            g_opt_filepath_, g_opt_timeout_ms_);
+    if (g_opt_gpio_) {
+        ssize_t num = 0;
+        char val = 0;
+
+        verbose_("Polling for a gpio\n");
+        num = read(fd, &val, 1);
+        verbose_("%s dummy read, num=%d, val=%d.\n",
+                g_opt_filepath_, num, val);
+        fds.events = (POLLPRI | POLLERR) ;
+
+    } else {
+        verbose_("Polling for a file\n");
+        fds.events = POLLIN;
+    }
+    fds.revents = 0;
+    fds.fd = fd;
+
+    verbose_("poll() for %s, events=0x%02x, timeout=%d.\n",
+            g_opt_filepath_, fds.events, g_opt_timeout_ms_);
     ret = poll(&fds, 1, g_opt_timeout_ms_);
     verbose_("poll() retuened %d.\n", ret);
 
@@ -135,11 +164,13 @@ int main(int argc_, char *argv_[])
     if (ret < 0) {
         exit(EXIT_FAILURE);
     }
+    verbose_("got event 0x%02x.\n", fds.revents);
 
     if (0 == ret) {
         printf("Timed out.\n");
     }
 
+    verbose_("Success.\n");
     return EXIT_SUCCESS;
 }
 
